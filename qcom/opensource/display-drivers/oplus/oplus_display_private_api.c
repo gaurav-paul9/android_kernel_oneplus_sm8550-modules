@@ -2845,6 +2845,15 @@ int oplus_display_panel_switch_gamma_mode(struct dsi_panel *panel, u32 bl_lvl)
 	return rc;
 }
 
+static void oplus_display_panel_handle_hbm_max(struct dsi_display *display)
+{
+	if (display && display->panel && display->panel->oplus_priv.hbm_max_state > 0) {
+		u32 hbm_off_cmd = 0;
+		LCD_INFO("Manual HBM (hbm_max) is on, turning off before sleep/off\n");
+		oplus_display_panel_set_hbm_max(&hbm_off_cmd);
+	}
+}
+
 int oplus_display_set_power(struct drm_connector *connector,
 		int power_mode, void *disp)
 {
@@ -2870,6 +2879,7 @@ int oplus_display_set_power(struct drm_connector *connector,
 				display->panel->power_mode == SDE_MODE_DPMS_ON) {
 			notify_off = true;
 		}
+		oplus_display_panel_handle_hbm_max(display);
 
 #ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
 		if (oplus_ofp_is_supported()) {
@@ -2900,6 +2910,8 @@ int oplus_display_set_power(struct drm_connector *connector,
 		break;
 
 	case SDE_MODE_DPMS_OFF:
+		oplus_display_panel_handle_hbm_max(display);
+
 #ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
 		if (oplus_ofp_is_supported()) {
 			oplus_ofp_power_mode_handle(display, SDE_MODE_DPMS_OFF);
