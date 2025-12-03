@@ -3415,7 +3415,7 @@ static int syna_dev_probe(struct platform_device *pdev)
 		LOGE("Fail to allocate TouchCom device handle\n");
 		goto err_allocate_cdev;
 	}
-
+#if 0
 	retval = tp_healthinfo_init(&pdev->dev, &tcm->monitor_data);
 
 	if (retval < 0) {
@@ -3426,6 +3426,9 @@ static int syna_dev_probe(struct platform_device *pdev)
 		tcm->health_monitor_support = true;
 		/*tcm->monitor_data.debug_info_ops = tcm->debug_info_ops;*/
 	}
+#endif
+	tcm->monitor_data.health_monitor_support = false;
+	tcm->health_monitor_support = false;
 
 	tcm->exception_upload_support = true;
 	tcm->exception_data.exception_upload_support = true;
