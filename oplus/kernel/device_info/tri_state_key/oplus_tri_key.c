@@ -1779,11 +1779,6 @@ static void trikey_panel_notifier_callback(enum panel_event_notifier_tag tag,
 		TRI_KEY_LOG("Invalid notification\n");
 		return;
 	}
-	if (notification->notif_type < DRM_PANEL_EVENT_FOR_TOUCH) {
-		TRI_KEY_LOG("Notification type:%d, early_trigger:%d",
-			notification->notif_type,
-			notification->notif_data.early_trigger);
-	}
 
 	if (g_hall_dev->bus_ready == false) {
 		TRI_KEY_LOG("bus_ready not ready, tp exit\n");
