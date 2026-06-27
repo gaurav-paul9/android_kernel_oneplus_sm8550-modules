@@ -1292,8 +1292,8 @@ static void sde_kms_prepare_commit(struct msm_kms *kms,
 	if (IS_ENABLED(CONFIG_KPROFILES)) {
 		extern int kp_active_mode(void);
 		if (kp_active_mode() == 3) {
-			extern void cpu_boost_kick(unsigned int duration_ms);
-			cpu_boost_kick(2);
+			extern void qcom_dcvs_bus_boost_kick(unsigned int duration_ms);
+			qcom_dcvs_bus_boost_kick(2);
 		}
 	}
 
