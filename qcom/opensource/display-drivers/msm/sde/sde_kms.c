@@ -1289,6 +1289,14 @@ static void sde_kms_prepare_commit(struct msm_kms *kms,
 		goto end;
 	}
 
+	if (IS_ENABLED(CONFIG_KPROFILES)) {
+		extern int kp_active_mode(void);
+		if (kp_active_mode() == 3) {
+			extern void cpu_boost_kick(unsigned int duration_ms);
+			cpu_boost_kick(2);
+		}
+	}
+
 	if (sde_kms->first_kickoff) {
 		sde_power_scale_reg_bus(&priv->phandle, VOTE_INDEX_HIGH, false);
 		sde_kms->first_kickoff = false;
