@@ -302,6 +302,8 @@ int opticalfp_irq_handler(struct fp_underscreen_info *tp_info) {
     pr_info("[%s] opticalfp_irq_handler tp_info->touch_state =%d, tp_info->x =%d, tp_info->y =%d, \n", \
         __func__, tp_info->touch_state, tp_info->x, tp_info->y);
     if (1 == tp_info->touch_state) {
+        extern void cpu_boost_max(unsigned int duration_ms);
+        cpu_boost_max(500);
         send_fingerprint_msg(E_FP_TP, tp_info->touch_state, tp_info, sizeof(struct fp_underscreen_info));
         g_last_tp_state = tp_info->touch_state;
     } else {
