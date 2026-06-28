@@ -901,6 +901,10 @@ int opticalfp_irq_handler_uff(struct fp_underscreen_info *tp_info) {
     pr_info("[%s] tp_info->touch_state =%d, tp_info->x =%d, tp_info->y =%d, \n", __func__, tp_info->touch_state, tp_info->x, tp_info->y);
     wake_lock_timeout(&fp_wakelock, msecs_to_jiffies(WAKELOCK_HOLD_IRQ_TIME));
     if (1 == tp_info->touch_state) {
+        extern void cpu_boost_max(unsigned int duration_ms);
+        extern void qcom_dcvs_bus_boost_kick_max(unsigned int duration_ms);
+        cpu_boost_max(500);
+        qcom_dcvs_bus_boost_kick_max(500);
         fp_enable_intr3(fp_dev);
         pr_info("%s touch down \n", __func__);
         msg = NETLINK_EVENT_TP_TOUCHDOWN;
