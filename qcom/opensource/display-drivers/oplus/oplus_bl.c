@@ -141,7 +141,13 @@ int oplus_panel_parse_bl_config(struct dsi_panel *panel)
 
 	rc = utils->read_u32(utils->data, "oplus,pwm-onepulse-backlight-threshold", &val);
 	if (rc) {
-		panel->oplus_priv.pwm_onepulse_support = false;
+		/*
+		 panels such as AA551 declare oplus,pwm-onepulse-support without this
+		 threshold because they are excluded from the onepulse backlight remap,
+		 so keep onepulse support and default the threshold above the remap range
+		*/
+		panel->bl_config.pwm_bl_onepulse_threshold =
+				panel->bl_config.brightness_normal_max_level + 1;
 	} else {
 		panel->bl_config.pwm_bl_onepulse_threshold = val;
 	}
