@@ -1986,15 +1986,21 @@ int oplus_adfr_status_reset(void *dsi_panel)
 
 		/*
 		 no userspace on this ROM writes the qsync_min_fps property to drive
-		 min fps, so request the lowest min fps of this timing here and let
-		 the next kickoff send it: min_fps_check clamps the active floor to
-		 oplus,adfr-idle-off-min-fps and idle mode drops it further
+		 min fps, so request it here and let the next kickoff send it:
+		 user_min_fps 0 (auto) requests the lowest min fps of this timing
+		 (min_fps_check clamps the active floor to oplus,adfr-idle-off-min-fps
+		 and idle mode drops it further), a fixed refresh rate request gets
+		 clamped into this timing's table (its max entry is the mode rate)
 		*/
 		if (panel->cur_mode->priv_info
 				&& panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count) {
-			p_oplus_adfr_params->sa_min_fps =
-					panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table[
-						panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count - 1];
+			if (p_oplus_adfr_params->user_min_fps) {
+				p_oplus_adfr_params->sa_min_fps = p_oplus_adfr_params->user_min_fps;
+			} else {
+				p_oplus_adfr_params->sa_min_fps =
+						panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table[
+							panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count - 1];
+			}
 			p_oplus_adfr_params->sa_min_fps_updated = true;
 		}
 
@@ -5761,6 +5767,107 @@ ssize_t oplus_adfr_get_config_attr(struct kobject *obj,
 	ADFR_DEBUG("end\n");
 
 	return sprintf(buf, "0x%x\n", p_oplus_adfr_params->config);
+}
+
+/* adfr_min_fps */
+ssize_t oplus_adfr_set_min_fps_attr(struct kobject *obj,
+	struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int min_fps = 0;
+	unsigned int h_skew = STANDARD_ADFR;
+	struct dsi_display *display = oplus_display_get_current_display();
+	struct oplus_adfr_params *p_oplus_adfr_params = NULL;
+
+	ADFR_DEBUG("start\n");
+
+	if (!buf || !display || !display->panel) {
+		ADFR_ERR("invalid buf or display params\n");
+		return count;
+	}
+
+	p_oplus_adfr_params = oplus_adfr_get_params(display->panel);
+	if (!p_oplus_adfr_params) {
+		ADFR_ERR("invalid p_oplus_adfr_params param\n");
+		return count;
+	}
+
+	OPLUS_ADFR_TRACE_BEGIN("oplus_adfr_set_min_fps_attr");
+
+	sscanf(buf, "%u", &min_fps);
+
+	if (min_fps == p_oplus_adfr_params->user_min_fps) {
+		ADFR_INFO("oplus_adfr_user_min_fps unchanged:%u\n", min_fps);
+		goto end;
+	}
+
+	p_oplus_adfr_params->user_min_fps = min_fps;
+	ADFR_INFO("oplus_adfr_user_min_fps:%u\n", min_fps);
+	OPLUS_ADFR_TRACE_INT("oplus_adfr_user_min_fps", min_fps);
+
+	if (!oplus_adfr_is_supported(p_oplus_adfr_params)) {
+		ADFR_DEBUG("adfr is not supported\n");
+		goto end;
+	}
+
+	/*
+	 apply immediately: request the new value (0 restores the lowest table
+	 entry of the current timing), min_fps_check clamps it into the table;
+	 while hbm is active only the request is armed and the kickoff guard
+	 sends it after hbm off, and a powered off panel picks it up through
+	 status_reset at the next panel enable
+	*/
+	if (display->panel->cur_mode
+			&& display->panel->cur_mode->priv_info
+			&& display->panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count) {
+		h_skew = display->panel->cur_mode->timing.h_skew;
+		if ((h_skew == STANDARD_ADFR) || (h_skew == STANDARD_MFR)) {
+			if (min_fps) {
+				p_oplus_adfr_params->sa_min_fps = min_fps;
+			} else {
+				p_oplus_adfr_params->sa_min_fps =
+						display->panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table[
+							display->panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count - 1];
+			}
+			p_oplus_adfr_params->sa_min_fps_updated = true;
+
+			if ((display->panel->power_mode == SDE_MODE_DPMS_ON)
+					&& !oplus_adfr_hbm_is_active(display->panel)) {
+				p_oplus_adfr_params->sa_min_fps_updated = false;
+				oplus_adfr_min_fps_update(display, p_oplus_adfr_params->sa_min_fps);
+			}
+		}
+	}
+
+end:
+	OPLUS_ADFR_TRACE_END("oplus_adfr_set_min_fps_attr");
+
+	ADFR_DEBUG("end\n");
+
+	return count;
+}
+
+ssize_t oplus_adfr_get_min_fps_attr(struct kobject *obj,
+	struct kobj_attribute *attr, char *buf)
+{
+	struct dsi_display *display = oplus_display_get_current_display();
+	struct oplus_adfr_params *p_oplus_adfr_params = NULL;
+
+	ADFR_DEBUG("start\n");
+
+	if (!buf || !display || !display->panel) {
+		ADFR_ERR("invalid buf or display params\n");
+		return -EINVAL;
+	}
+
+	p_oplus_adfr_params = oplus_adfr_get_params(display->panel);
+	if (!p_oplus_adfr_params) {
+		ADFR_ERR("invalid p_oplus_adfr_params param\n");
+		return -EINVAL;
+	}
+
+	ADFR_DEBUG("end\n");
+
+	return sprintf(buf, "%u\n", p_oplus_adfr_params->user_min_fps);
 }
 
 /* mux_vsync_switch */
