@@ -1152,8 +1152,12 @@ int oplus_adfr_property_update(void *sde_connector, void *sde_connector_state, i
 		return -EINVAL;
 	}
 
-	p_oplus_adfr_params->sa_min_fps = 1;
-	p_oplus_adfr_params->sa_min_fps_updated = true;
+	/*
+	 no oplus userspace computes the min fps magic word on this ROM, so
+	 request the lowest sa min fps on every property write and let the
+	 dedup below resend only on actual changes (min_fps_check clamps the
+	 active floor to oplus,adfr-idle-off-min-fps outside mipi idle)
+	*/
 	prop_val  = OPLUS_ADFR_SA_MAGIC
 		| OPLUS_ADFR_SA_MIN_FPS_MAGIC
 		| 1;
@@ -1448,15 +1452,12 @@ static int oplus_adfr_auto_mode_update(void *dsi_display, unsigned int auto_mode
 /* prevent the wrong min fps setting */
 static int oplus_adfr_min_fps_check(void *dsi_panel, unsigned int min_fps)
 {
-#if 0
 	unsigned char min_fps_mapping_table_count = 0;
 	unsigned int refresh_rate = 120;
 	unsigned int h_skew = STANDARD_ADFR;
 	unsigned int idle_off_min_fps = 0;
 	struct dsi_panel *panel = dsi_panel;
 	struct oplus_adfr_params *p_oplus_adfr_params = NULL;
-#endif
-	struct dsi_panel *panel = dsi_panel;
 
 	ADFR_DEBUG("start\n");
 
@@ -1472,7 +1473,6 @@ static int oplus_adfr_min_fps_check(void *dsi_panel, unsigned int min_fps)
 	}
 #endif /* CONFIG_PXLW_IRIS */
 
-#if 0
 	p_oplus_adfr_params = oplus_adfr_get_params(panel);
 	if (!p_oplus_adfr_params) {
 		ADFR_ERR("invalid p_oplus_adfr_params param\n");
@@ -1524,9 +1524,6 @@ static int oplus_adfr_min_fps_check(void *dsi_panel, unsigned int min_fps)
 	ADFR_DEBUG("end\n");
 
 	return min_fps;
-#else
-	return 1;
-#endif
 }
 
 static int oplus_adfr_min_fps_update(void *dsi_display, unsigned int min_fps)
@@ -1614,6 +1611,118 @@ end:
 	ADFR_DEBUG("end\n");
 
 	return rc;
+}
+
+/*
+ min fps cmds rewrite ddic registers which hbm cmds also program (such as the
+ drive/gamma settings of the AA551 panel), so min fps updates must be frozen
+ while any hbm mode is active, whether it comes from the fod flow (hbm_state)
+ or from the hbm max brightness interface (hbm_max_state)
+*/
+static bool oplus_adfr_hbm_is_active(void *dsi_panel)
+{
+	bool active = false;
+	struct dsi_panel *panel = dsi_panel;
+
+	if (!panel) {
+		ADFR_ERR("invalid panel param\n");
+		return false;
+	}
+
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+	if (oplus_ofp_is_supported() && oplus_ofp_get_hbm_state()) {
+		active = true;
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
+
+	if (panel->oplus_priv.hbm_max_state) {
+		active = true;
+	}
+
+	return active;
+}
+
+/* fixed max min fps should be set before hbm on, otherwise hbm cmds may take effect in low frequency self-refresh */
+int oplus_adfr_hbm_min_fps_max(void *dsi_display)
+{
+	unsigned int h_skew = STANDARD_ADFR;
+	struct dsi_display *display = dsi_display;
+	struct oplus_adfr_params *p_oplus_adfr_params = NULL;
+
+	ADFR_DEBUG("start\n");
+
+	if (!display || !display->panel || !display->panel->cur_mode) {
+		ADFR_ERR("invalid display params\n");
+		return -EINVAL;
+	}
+
+	p_oplus_adfr_params = oplus_adfr_get_params(display->panel);
+	if (!p_oplus_adfr_params) {
+		ADFR_ERR("invalid p_oplus_adfr_params param\n");
+		return -EINVAL;
+	}
+
+	if (!oplus_adfr_is_supported(p_oplus_adfr_params)) {
+		ADFR_DEBUG("adfr is not supported\n");
+		return 0;
+	}
+
+	h_skew = display->panel->cur_mode->timing.h_skew;
+	if ((h_skew != STANDARD_ADFR) && (h_skew != STANDARD_MFR)) {
+		ADFR_DEBUG("should not set max min fps in oa mode\n");
+		return 0;
+	}
+
+	if (display->panel->power_mode != SDE_MODE_DPMS_ON) {
+		ADFR_DEBUG("should not set max min fps when power mode is %u\n", display->panel->power_mode);
+		return 0;
+	}
+
+	ADFR_INFO("set max min fps %u before hbm on\n", display->panel->cur_mode->timing.refresh_rate);
+
+	ADFR_DEBUG("end\n");
+
+	return oplus_adfr_min_fps_update(display, display->panel->cur_mode->timing.refresh_rate);
+}
+
+/* update min fps after hbm off as min fps setting is frozen while hbm is active */
+int oplus_adfr_hbm_min_fps_restore(void *dsi_panel)
+{
+	unsigned int h_skew = STANDARD_ADFR;
+	struct dsi_panel *panel = dsi_panel;
+	struct oplus_adfr_params *p_oplus_adfr_params = NULL;
+
+	ADFR_DEBUG("start\n");
+
+	if (!panel || !panel->cur_mode) {
+		ADFR_ERR("invalid panel params\n");
+		return -EINVAL;
+	}
+
+	p_oplus_adfr_params = oplus_adfr_get_params(panel);
+	if (!p_oplus_adfr_params) {
+		ADFR_ERR("invalid p_oplus_adfr_params param\n");
+		return -EINVAL;
+	}
+
+	if (!oplus_adfr_is_supported(p_oplus_adfr_params)) {
+		ADFR_DEBUG("adfr is not supported\n");
+		return 0;
+	}
+
+	h_skew = panel->cur_mode->timing.h_skew;
+	if ((h_skew != STANDARD_ADFR) && (h_skew != STANDARD_MFR)) {
+		ADFR_DEBUG("no need to restore min fps in oa mode\n");
+		return 0;
+	}
+
+	p_oplus_adfr_params->sa_min_fps_updated = true;
+	ADFR_INFO("min fps %u will be restored after hbm off\n", p_oplus_adfr_params->sa_min_fps);
+	OPLUS_ADFR_TRACE_INT("oplus_adfr_sa_min_fps_updated", p_oplus_adfr_params->sa_min_fps_updated);
+
+	ADFR_DEBUG("end\n");
+
+	return 0;
 }
 
 /* some panel should resend sa cmd when finished booting, otherwise sa mode cannot take effect */
@@ -1795,27 +1904,12 @@ int oplus_adfr_sa_handle(void *sde_encoder_virt)
 		OPLUS_ADFR_TRACE_INT("oplus_adfr_fakeframe_updated", p_oplus_adfr_params->fakeframe_updated);
 	}
 
-#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
 	/* fixed max min fps can be set in hbm on, and update it after hbm off */
-	if (oplus_ofp_is_supported() && !oplus_ofp_oled_capacitive_is_enabled()
-			&& !oplus_ofp_local_hbm_is_enabled() && !oplus_ofp_ultrasonic_is_enabled()) {
-		if (p_oplus_adfr_params->sa_min_fps_updated && !oplus_ofp_get_hbm_state()) {
-			if (p_oplus_adfr_params->skip_min_fps_setting) {
-				ADFR_INFO("skip min fps %u setting\n", p_oplus_adfr_params->sa_min_fps);
-			} else {
-				rc = oplus_adfr_min_fps_update(display, p_oplus_adfr_params->sa_min_fps);
-				if (rc) {
-					ADFR_ERR("failed to update sa min fps, rc=%d\n", rc);
-				}
-			}
-			p_oplus_adfr_params->sa_min_fps_updated = false;
-			ADFR_DEBUG("oplus_adfr_sa_min_fps_updated:%d\n", p_oplus_adfr_params->sa_min_fps_updated);
-			OPLUS_ADFR_TRACE_INT("oplus_adfr_sa_min_fps_updated", p_oplus_adfr_params->sa_min_fps_updated);
-		}
-	} else
-#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
-	 {
-		if (p_oplus_adfr_params->sa_min_fps_updated) {
+	if (p_oplus_adfr_params->sa_min_fps_updated) {
+		if (oplus_adfr_hbm_is_active(display->panel)) {
+			/* keep sa_min_fps_updated set so that min fps is resent once hbm is off */
+			ADFR_DEBUG("min fps %u setting is deferred while hbm is active\n", p_oplus_adfr_params->sa_min_fps);
+		} else {
 			if (p_oplus_adfr_params->skip_min_fps_setting) {
 				ADFR_INFO("skip min fps %u setting\n", p_oplus_adfr_params->sa_min_fps);
 			} else {
@@ -1889,6 +1983,20 @@ int oplus_adfr_status_reset(void *dsi_panel)
 		}
 
 		p_oplus_adfr_params->sa_min_fps = refresh_rate;
+
+		/*
+		 no userspace on this ROM writes the qsync_min_fps property to drive
+		 min fps, so request the lowest min fps of this timing here and let
+		 the next kickoff send it: min_fps_check clamps the active floor to
+		 oplus,adfr-idle-off-min-fps and idle mode drops it further
+		*/
+		if (panel->cur_mode->priv_info
+				&& panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count) {
+			p_oplus_adfr_params->sa_min_fps =
+					panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table[
+						panel->cur_mode->priv_info->oplus_adfr_min_fps_mapping_table_count - 1];
+			p_oplus_adfr_params->sa_min_fps_updated = true;
+		}
 
 		if (oplus_adfr_high_precision_sa_mode_is_enabled(p_oplus_adfr_params)) {
 			p_oplus_adfr_params->sa_high_precision_fps = refresh_rate;
@@ -3415,14 +3523,10 @@ int oplus_adfr_idle_mode_handle(void *sde_encoder_virt, bool enter_idle)
 		return 0;
 	}
 
-#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
-	if (oplus_ofp_is_supported() && !oplus_ofp_oled_capacitive_is_enabled()
-			&& !oplus_ofp_local_hbm_is_enabled() && !oplus_ofp_ultrasonic_is_enabled()
-			&& oplus_ofp_get_hbm_state()) {
-		ADFR_DEBUG("should not handle idle mode when hbm state is true\n");
+	if (oplus_adfr_hbm_is_active(display->panel)) {
+		ADFR_DEBUG("should not handle idle mode when hbm is active\n");
 		return 0;
 	}
-#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 
 	/* idle mode are available only after power on */
 	if (display->panel->power_mode != SDE_MODE_DPMS_ON) {
@@ -3679,7 +3783,8 @@ static irqreturn_t oplus_adfr_test_te_irq_handler(int irq, void *data)
 	}
 
 	if (!oplus_adfr_is_supported(p_oplus_adfr_params)) {
-		ADFR_ERR("adfr is not supported\n");
+		/* fires at TE rate while adfr is toggled off, so no error print here */
+		ADFR_DEBUG("adfr is not supported\n");
 		return IRQ_HANDLED;
 	}
 
@@ -5578,7 +5683,39 @@ ssize_t oplus_adfr_set_config_attr(struct kobject *obj,
 
 	sscanf(buf, "%x", &config);
 
-	p_oplus_adfr_params->config = config;
+	/*
+	 apply global enable changes immediately, otherwise a toggle only takes
+	 effect at the next panel enable or timing switch
+	*/
+	if (config == p_oplus_adfr_params->config) {
+		ADFR_INFO("oplus_adfr_config unchanged:0x%x\n", config);
+	} else if (oplus_adfr_is_supported(p_oplus_adfr_params)
+			&& !OPLUS_ADFR_GET_GLOBAL_CONFIG(config)) {
+		/*
+		 disabling: the ddic keeps the last programmed min fps, so restore
+		 the constant mode rate first while sending is still allowed; skip
+		 if hbm is active as min fps is already pinned at max until hbm off
+		*/
+		if (display->panel->cur_mode
+				&& ((display->panel->cur_mode->timing.h_skew == STANDARD_ADFR)
+					|| (display->panel->cur_mode->timing.h_skew == STANDARD_MFR))
+				&& (display->panel->power_mode == SDE_MODE_DPMS_ON)
+				&& !oplus_adfr_hbm_is_active(display->panel)) {
+			p_oplus_adfr_params->sa_min_fps = display->panel->cur_mode->timing.refresh_rate;
+			p_oplus_adfr_params->sa_min_fps_updated = false;
+			ADFR_INFO("restore min fps %u before adfr disable\n", p_oplus_adfr_params->sa_min_fps);
+			oplus_adfr_min_fps_update(display, p_oplus_adfr_params->sa_min_fps);
+		}
+		p_oplus_adfr_params->config = config;
+	} else if (!oplus_adfr_is_supported(p_oplus_adfr_params)
+			&& OPLUS_ADFR_GET_GLOBAL_CONFIG(config)) {
+		/* enabling: arm the lowest min fps as panel enable/timing switch would */
+		p_oplus_adfr_params->config = config;
+		oplus_adfr_status_reset(display->panel);
+	} else {
+		p_oplus_adfr_params->config = config;
+	}
+
 	ADFR_INFO("oplus_adfr_config:0x%x\n", p_oplus_adfr_params->config);
 	OPLUS_ADFR_TRACE_INT("oplus_adfr_config", p_oplus_adfr_params->config);
 

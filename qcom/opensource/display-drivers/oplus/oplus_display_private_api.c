@@ -1617,6 +1617,13 @@ static ssize_t oplus_display_set_hbm_max_debug(struct kobject *obj,
 	}
 	LCD_INFO("Set hbm max, state=%d\n", hbm_max_state);
 
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	/* min fps cmds overwrite hbm registers, so freeze min fps at max while hbm max is active */
+	if (hbm_max_state) {
+		oplus_adfr_hbm_min_fps_max(display);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+
 	mutex_lock(&display->display_lock);
 
 	if (hbm_max_state) {
@@ -1640,6 +1647,12 @@ static ssize_t oplus_display_set_hbm_max_debug(struct kobject *obj,
 	panel->oplus_priv.hbm_max_state = hbm_max_state;
 
 	mutex_unlock(&display->display_lock);
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	if (!hbm_max_state) {
+		oplus_adfr_hbm_min_fps_restore(panel);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
 
 	return count;
 }

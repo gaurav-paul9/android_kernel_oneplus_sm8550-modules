@@ -3210,6 +3210,13 @@ int oplus_display_panel_set_hbm_max(void *data)
 		return rc;
 	}
 
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	/* min fps cmds overwrite hbm registers, so freeze min fps at max while hbm max is active */
+	if (hbm_max_state) {
+		oplus_adfr_hbm_min_fps_max(display);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+
 	mutex_lock(&display->display_lock);
 
 	last_bl = oplus_last_backlight;
@@ -3239,6 +3246,12 @@ int oplus_display_panel_set_hbm_max(void *data)
 	panel->oplus_priv.hbm_max_state = hbm_max_state;
 
 	mutex_unlock(&display->display_lock);
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	if (!hbm_max_state) {
+		oplus_adfr_hbm_min_fps_restore(panel);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
 
 	return rc;
 }
@@ -3270,6 +3283,38 @@ int oplus_display_panel_get_hbm_max(void *data)
 	mutex_unlock(&panel->panel_lock);
 	mutex_unlock(&display->display_lock);
 	LCD_INFO("Get hbm max state: %d\n", *hbm_max_state);
+
+	return rc;
+}
+
+/*
+ hbm max cmds are defined per timing node and timing switch cmds reprogram
+ panel registers, so re-latch hbm max after a timing switch if it is active.
+ must be called with panel_lock held.
+*/
+int oplus_panel_hbm_max_resend(struct dsi_panel *panel)
+{
+	int rc = 0;
+
+	if (!panel || !panel->cur_mode || !panel->cur_mode->priv_info) {
+		LCD_ERR("Invalid panel params\n");
+		return -EINVAL;
+	}
+
+	if (!panel->oplus_priv.hbm_max_state)
+		return 0;
+
+	if (!panel->cur_mode->priv_info->cmd_sets[DSI_CMD_HBM_MAX].count) {
+		LCD_WARN("DSI_CMD_HBM_MAX is undefined, can not resend it after timing switch\n");
+		return 0;
+	}
+
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_MAX);
+	if (rc) {
+		LCD_ERR("failed to resend DSI_CMD_HBM_MAX after timing switch, rc=%d\n", rc);
+		return rc;
+	}
+	LCD_INFO("resend hbm max cmds after timing switch\n");
 
 	return rc;
 }
