@@ -861,6 +861,10 @@ static int oplus_ofp_panel_cmd_set_nolock(void *dsi_panel, enum dsi_cmd_set_type
 		oplus_ofp_set_hbm_state(false);
 		oplus_hbm_pwm_state(panel, false);
 
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+		oplus_adfr_hbm_min_fps_restore(panel);
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+
 		/*
 		 if backlight level is in global hbm range before hbm on, reset the oplus_global_hbm_flags,
 		 so that it can reenter global hbm level after hbm off
@@ -921,6 +925,10 @@ static int oplus_ofp_panel_cmd_set_nolock(void *dsi_panel, enum dsi_cmd_set_type
 	case DSI_CMD_LHBM_PRESSED_ICON_OFF:
 		oplus_ofp_set_hbm_state(false);
 		oplus_hbm_pwm_state(panel, false);
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+		oplus_adfr_hbm_min_fps_restore(panel);
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
 
 		/*
 		 if backlight level is in global hbm range before hbm on, reset the oplus_global_hbm_flags,

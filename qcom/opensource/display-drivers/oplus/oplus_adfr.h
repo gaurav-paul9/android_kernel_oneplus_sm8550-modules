@@ -255,6 +255,8 @@ int oplus_adfr_irq_handler(void *sde_encoder_phys, unsigned int irq_type);
 int oplus_adfr_sa_mode_restore(void *dsi_display);
 int oplus_adfr_sa_handle(void *sde_encoder_virt);
 int oplus_adfr_status_reset(void *dsi_panel);
+int oplus_adfr_hbm_min_fps_max(void *dsi_display);
+int oplus_adfr_hbm_min_fps_restore(void *dsi_panel);
 
 /* -------------------- high precision standard adfr -------------------- */
 int oplus_adfr_high_precision_handle(void *sde_enc_v);

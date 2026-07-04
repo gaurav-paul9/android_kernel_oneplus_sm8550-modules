@@ -5746,6 +5746,8 @@ int dsi_panel_switch(struct dsi_panel *panel)
 	if (panel->oplus_priv.pwm_switch_support) {
 		oplus_panel_pwm_switch_timing_switch(panel);
 	}
+
+	oplus_panel_hbm_max_resend(panel);
 #endif /* OPLUS_FEATURE_DISPLAY */
 
 	mutex_unlock(&panel->panel_lock);
