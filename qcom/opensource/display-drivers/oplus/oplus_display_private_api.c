@@ -3272,6 +3272,7 @@ static OPLUS_ATTR(ffc_mode, S_IRUGO|S_IWUSR, oplus_get_ffc_mode_debug,
 		oplus_set_ffc_mode_debug);
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
 static OPLUS_ATTR(adfr_config, S_IRUGO | S_IWUSR, oplus_adfr_get_config_attr, oplus_adfr_set_config_attr);
+static OPLUS_ATTR(adfr_min_fps, S_IRUGO | S_IWUSR, oplus_adfr_get_min_fps_attr, oplus_adfr_set_min_fps_attr);
 static OPLUS_ATTR(mux_vsync_switch, S_IRUGO | S_IWUSR, oplus_adfr_get_mux_vsync_switch_attr, oplus_adfr_set_mux_vsync_switch_attr);
 static OPLUS_ATTR(test_te, S_IRUGO | S_IWUSR, oplus_adfr_get_test_te_attr, oplus_adfr_set_test_te_attr);
 #endif /* OPLUS_FEATURE_DISPLAY_ADFR */
@@ -3342,6 +3343,7 @@ static struct attribute *oplus_display_attrs[] = {
 	&oplus_attr_ffc_mode.attr,
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
 	&oplus_attr_adfr_config.attr,
+	&oplus_attr_adfr_min_fps.attr,
 	&oplus_attr_mux_vsync_switch.attr,
 	&oplus_attr_test_te.attr,
 #endif /* OPLUS_FEATURE_DISPLAY_ADFR */
