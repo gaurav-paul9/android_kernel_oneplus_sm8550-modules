@@ -224,7 +224,7 @@ int cam_req_mgr_workq_enqueue_task(struct crm_workq_task *task,
 		queue_work(workq->job, &workq->work);
 	}
 #else
-	queue_work(workq->job, &workq->work);
+		queue_work(workq->job, &workq->work);
 #endif
 	WORKQ_RELEASE_LOCK(workq, flags);
 
@@ -253,6 +253,7 @@ int cam_req_mgr_workq_create(char *name, int32_t num_tasks,
 		wq_flags |= WQ_UNBOUND;
 		if (flags & CAM_WORKQ_FLAG_HIGH_PRIORITY)
 			wq_flags |= WQ_HIGHPRI;
+
 
 		if (flags & CAM_WORKQ_FLAG_SERIAL)
 			max_active_tasks = 1;
