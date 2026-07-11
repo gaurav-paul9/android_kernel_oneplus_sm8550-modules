@@ -2335,6 +2335,24 @@ static int _sde_kms_drm_obj_init(struct sde_kms *sde_kms)
 				sde_encoder_get_clones(priv->encoders[i]);
 	}
 
+	/*
+	 * All encoders are possible clones of each other: concurrent
+	 * writeback attaches the virtual WB encoder to a CRTC that is
+	 * already driving the DSI encoder. The DRM core clone check
+	 * (drm_atomic_check_valid_clones, backported to 5.15 LTS) treats
+	 * unset possible_clones as self-only and would reject every CWB
+	 * commit otherwise.
+	 */
+	{
+		struct drm_encoder *encoder;
+		u32 clone_mask = 0;
+
+		drm_for_each_encoder(encoder, dev)
+			clone_mask |= drm_encoder_mask(encoder);
+		drm_for_each_encoder(encoder, dev)
+			encoder->possible_clones = clone_mask;
+	}
+
 	return 0;
 fail:
 	_sde_kms_drm_obj_destroy(sde_kms);
