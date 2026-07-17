@@ -150,6 +150,7 @@ struct oplus_adfr_params {
 	bool sa_min_fps_updated;						/* indicates whether sa min fps is updated or not */
 	unsigned int user_min_fps;						/* userspace requested sa min fps, 0:auto (lowest table entry), clamped into the current timing's table otherwise */
 	bool skip_min_fps_setting;						/* indicates whether min fps setting should be skipped or not */
+	unsigned long iris_pt_settle_until;				/* jiffies before which min fps tx is deferred after a timing switch while the iris chip is in pt mode */
 	unsigned int sw_fps;							/* software vsync value */
 	unsigned int fakeframe;							/* indicates whether fakeframe is enabled or not */
 	bool fakeframe_updated;							/* indicates whether fakeframe is updated or not */
