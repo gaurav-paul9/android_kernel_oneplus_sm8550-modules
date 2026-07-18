@@ -44,6 +44,8 @@ int iris_post_fod(struct dsi_panel *panel);
 
 void iris_send_cont_splash(struct dsi_display *display);
 bool iris_is_pt_mode(struct dsi_panel *panel);
+void iris_set_frc_active(bool active);
+bool iris_frc_is_active(void);
 void iris_prepare(struct dsi_display *display);
 
 int iris_update_backlight(u32 bl_lvl);

@@ -124,6 +124,11 @@ void iris_init_memc(void)
 
 void iris_lightoff_memc(void)
 {
+	/* frc cannot survive a lightoff; also covers recovery paths where the
+	 * frc2pt sequence never ran
+	 */
+	iris_set_frc_active(false);
+
 	if (!memc_func.lightoff_memc)
 		return;
 

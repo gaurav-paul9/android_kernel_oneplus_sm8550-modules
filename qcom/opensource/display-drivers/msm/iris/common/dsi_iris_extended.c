@@ -21,6 +21,7 @@ static uint32_t iris_enable_dsi_cmd_log;
 static bool iris_chip_enable;
 static bool soft_iris_enable;
 static bool iris_dual_enable;
+static bool iris_frc_active;
 static const char *panel_name;
 static u32 iris_chip_caps;
 
@@ -130,6 +131,22 @@ bool iris_is_dual_supported(void)
 bool iris_is_pt_mode(struct dsi_panel *panel)
 {
 	return iris_get_abyp_mode(panel) == PASS_THROUGH_MODE;
+}
+
+/* frc = chip self-generates the panel output timing; panel cmds routed through
+ * the chip while frc is live can collide with its output sequence, so consumers
+ * (oplus_adfr min fps) hold their tx while this is set
+ */
+void iris_set_frc_active(bool active)
+{
+	if (iris_frc_active != active)
+		IRIS_LOGI("%s(), frc active: %d", __func__, active);
+	iris_frc_active = active;
+}
+
+bool iris_frc_is_active(void)
+{
+	return iris_frc_active;
 }
 
 void iris_dsi_display_res_init(struct dsi_display *display)

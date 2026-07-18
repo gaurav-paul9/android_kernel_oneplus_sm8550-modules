@@ -1659,6 +1659,22 @@ static bool oplus_adfr_iris_pt_settling(struct oplus_adfr_params *p_oplus_adfr_p
 #endif /* CONFIG_PXLW_IRIS */
 }
 
+/*
+ min fps tx must also be held while the chip is in frc (memc): the chip
+ self-generates the panel output timing there, and a min fps cmd routed
+ through it can collide with that sequence the same way the post-switch
+ window does; the flag is re-armed by the caller so the floor is sent on
+ the first kickoff after frc exits
+*/
+static bool oplus_adfr_iris_busy(struct oplus_adfr_params *p_oplus_adfr_params)
+{
+#if defined(CONFIG_PXLW_IRIS)
+	return oplus_adfr_iris_pt_settling(p_oplus_adfr_params) || iris_frc_is_active();
+#else
+	return false;
+#endif /* CONFIG_PXLW_IRIS */
+}
+
 /* fixed max min fps should be set before hbm on, otherwise hbm cmds may take effect in low frequency self-refresh */
 int oplus_adfr_hbm_min_fps_max(void *dsi_display)
 {
@@ -1926,9 +1942,9 @@ int oplus_adfr_sa_handle(void *sde_encoder_virt)
 		if (oplus_adfr_hbm_is_active(display->panel)) {
 			/* keep sa_min_fps_updated set so that min fps is resent once hbm is off */
 			ADFR_DEBUG("min fps %u setting is deferred while hbm is active\n", p_oplus_adfr_params->sa_min_fps);
-		} else if (oplus_adfr_iris_pt_settling(p_oplus_adfr_params)) {
-			/* keep sa_min_fps_updated set so that min fps is sent once the iris chip has settled */
-			ADFR_DEBUG("min fps %u setting is deferred while iris pt is settling\n", p_oplus_adfr_params->sa_min_fps);
+		} else if (oplus_adfr_iris_busy(p_oplus_adfr_params)) {
+			/* keep sa_min_fps_updated set so that min fps is sent once the iris chip has settled / left frc */
+			ADFR_DEBUG("min fps %u setting is deferred while the iris chip is settling or in frc\n", p_oplus_adfr_params->sa_min_fps);
 		} else {
 			if (p_oplus_adfr_params->skip_min_fps_setting) {
 				ADFR_INFO("skip min fps %u setting\n", p_oplus_adfr_params->sa_min_fps);
@@ -3561,8 +3577,8 @@ int oplus_adfr_idle_mode_handle(void *sde_encoder_virt, bool enter_idle)
 		return 0;
 	}
 
-	if (oplus_adfr_iris_pt_settling(p_oplus_adfr_params)) {
-		ADFR_DEBUG("should not handle idle mode while iris pt is settling\n");
+	if (oplus_adfr_iris_busy(p_oplus_adfr_params)) {
+		ADFR_DEBUG("should not handle idle mode while the iris chip is settling or in frc\n");
 		return 0;
 	}
 
@@ -5864,7 +5880,7 @@ ssize_t oplus_adfr_set_min_fps_attr(struct kobject *obj,
 
 			if ((display->panel->power_mode == SDE_MODE_DPMS_ON)
 					&& !oplus_adfr_hbm_is_active(display->panel)
-					&& !oplus_adfr_iris_pt_settling(p_oplus_adfr_params)) {
+					&& !oplus_adfr_iris_busy(p_oplus_adfr_params)) {
 				p_oplus_adfr_params->sa_min_fps_updated = false;
 				oplus_adfr_min_fps_update(display, p_oplus_adfr_params->sa_min_fps);
 			}
