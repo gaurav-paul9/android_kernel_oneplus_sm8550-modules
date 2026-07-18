@@ -1730,6 +1730,7 @@ void iris_memc_ctrl_cmd_proc_i7p(u32 cmd)
 {
 	switch (cmd) {
 	case MEMC_CTRL_FRC_PREPARE:
+		iris_set_frc_active(true);
 		iris_memc_ctrl_frc_prepare_i7p();
 		IRIS_LOGI("MEMC_CTRL_FRC_PREPARE");
 		break;
@@ -1748,6 +1749,7 @@ void iris_memc_ctrl_cmd_proc_i7p(u32 cmd)
 		break;
 	case MEMC_CTRL_FRC2PT:
 		iris_memc_ctrl_pt_post_i7p();
+		iris_set_frc_active(false);
 		IRIS_LOGI("MEMC_CTRL_FRC2PT");
 		break;
 	case MEMC_CTRL_PT2RFB:
