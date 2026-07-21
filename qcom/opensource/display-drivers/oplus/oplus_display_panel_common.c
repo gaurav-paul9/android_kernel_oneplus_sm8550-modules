@@ -3175,6 +3175,15 @@ void oplus_disable_bl_delay_with_frame(struct dsi_panel *panel, u32 disable_fram
 	return;
 }
 
+/*
+ * Single owner for hbm_max (sysfs + ioctl + screen-off).
+ *
+ * Enable order (K2): arm hbm_max_state first so sa_handle freezes min-fps,
+ * then pin max min-fps (takes its own locks — never call under display_lock),
+ * then TX HBM_MAX. last_bl is saved only on enable.
+ * Disable: EXIT_HBM_MAX if present, else restore last_bl; clear flag; re-arm ADFR.
+ * Onepulse blocks enable only so screen-off can always clear HBM.
+ */
 int oplus_display_panel_set_hbm_max(void *data)
 {
 	int rc = 0;
@@ -3190,51 +3199,66 @@ int oplus_display_panel_set_hbm_max(void *data)
 
 	if (!display || !display->panel) {
 		LCD_ERR("Invalid display or panel\n");
-		rc = -EINVAL;
-		return rc;
+		return -EINVAL;
 	}
 
 	panel = display->panel;
 
-	if (display->panel->power_mode != SDE_MODE_DPMS_ON) {
+	if (panel->power_mode != SDE_MODE_DPMS_ON) {
 		LCD_WARN("display panel is not on\n");
-		rc = -EFAULT;
-		return rc;
+		return -EFAULT;
 	}
+
+	/* enable only: PWM onepulse and HBM_MAX are mutually exclusive */
+	if (hbm_max_state && oplus_panel_pwm_onepulse_is_enabled(panel)) {
+		LCD_WARN("panel onepulse is enable, can't set hbm max\n");
+		return -EFAULT;
+	}
+
+	mutex_lock(&display->display_lock);
+	if (panel->oplus_priv.hbm_max_state == hbm_max_state) {
+		mutex_unlock(&display->display_lock);
+		LCD_INFO("hbm max state already %d\n", hbm_max_state);
+		return 0;
+	}
+	mutex_unlock(&display->display_lock);
 
 	LCD_INFO("Set hbm max state=%d\n", hbm_max_state);
 
-	if (oplus_panel_pwm_onepulse_is_enabled(panel)) {
-		LCD_WARN("panel onepulse is enable, can't set hbm max\n");
-		rc = -EFAULT;
-		return rc;
-	}
+	if (hbm_max_state) {
+		/*
+		 * Arm the ADFR freeze before any min-fps pin or HBM cmds so a
+		 * concurrent sa_handle cannot TX a low min-fps after HBM latches.
+		 * oplus_adfr_hbm_min_fps_max still sends the pin (min_fps_update
+		 * is not gated on hbm_is_active).
+		 */
+		mutex_lock(&display->display_lock);
+		panel->oplus_priv.hbm_max_state = 1;
+		last_bl = oplus_last_backlight;
+		mutex_unlock(&display->display_lock);
 
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
-	/* min fps cmds overwrite hbm registers, so freeze min fps at max while hbm max is active */
-	if (hbm_max_state) {
+		/* min fps cmds overwrite hbm registers; pin max before HBM cmds */
 		oplus_adfr_hbm_min_fps_max(display);
-	}
 #endif /* OPLUS_FEATURE_DISPLAY_ADFR */
 
-	mutex_lock(&display->display_lock);
-
-	last_bl = oplus_last_backlight;
-	if (hbm_max_state) {
-		if (panel->cur_mode->priv_info->cmd_sets[DSI_CMD_HBM_MAX].count) {
+		mutex_lock(&display->display_lock);
+		if (panel->cur_mode && panel->cur_mode->priv_info &&
+				panel->cur_mode->priv_info->cmd_sets[DSI_CMD_HBM_MAX].count) {
 			mutex_lock(&panel->panel_lock);
 			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_MAX);
 			mutex_unlock(&panel->panel_lock);
-		}
-		else {
+		} else {
 			LCD_WARN("DSI_CMD_HBM_MAX is undefined, set max backlight: %d\n",
 					panel->bl_config.bl_max_level);
 			rc = dsi_display_set_backlight(display->drm_conn,
 					display, panel->bl_config.bl_max_level);
 		}
-	}
-	else {
-		if (panel->cur_mode->priv_info->cmd_sets[DSI_CMD_EXIT_HBM_MAX].count) {
+		mutex_unlock(&display->display_lock);
+	} else {
+		mutex_lock(&display->display_lock);
+		if (panel->cur_mode && panel->cur_mode->priv_info &&
+				panel->cur_mode->priv_info->cmd_sets[DSI_CMD_EXIT_HBM_MAX].count) {
 			mutex_lock(&panel->panel_lock);
 			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_EXIT_HBM_MAX);
 			mutex_unlock(&panel->panel_lock);
@@ -3242,16 +3266,14 @@ int oplus_display_panel_set_hbm_max(void *data)
 			rc = dsi_display_set_backlight(display->drm_conn,
 					display, last_bl);
 		}
-	}
-	panel->oplus_priv.hbm_max_state = hbm_max_state;
-
-	mutex_unlock(&display->display_lock);
+		/* clear flag after last HBM-related TX so freeze covers the window */
+		panel->oplus_priv.hbm_max_state = 0;
+		mutex_unlock(&display->display_lock);
 
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
-	if (!hbm_max_state) {
 		oplus_adfr_hbm_min_fps_restore(panel);
-	}
 #endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+	}
 
 	return rc;
 }

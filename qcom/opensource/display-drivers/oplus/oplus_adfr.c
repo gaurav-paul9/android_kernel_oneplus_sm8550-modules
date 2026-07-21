@@ -1153,15 +1153,11 @@ int oplus_adfr_property_update(void *sde_connector, void *sde_connector_state, i
 	}
 
 	/*
-	 no oplus userspace computes the min fps magic word on this ROM, so
-	 request the lowest sa min fps on every property write and let the
-	 dedup below resend only on actual changes (min_fps_check clamps the
-	 active floor to oplus,adfr-idle-off-min-fps outside mipi idle)
-	*/
-	prop_val  = OPLUS_ADFR_SA_MAGIC
-		| OPLUS_ADFR_SA_MIN_FPS_MAGIC
-		| 1;
-
+	 * Min-fps floor is self-driven (status_reset + adfr_min_fps sysfs).
+	 * Do not force prop_val to magic|1 (AlphaDroid kickstart remnant);
+	 * if userspace ever writes qsync_min_fps again, honor the real value
+	 * and only mark updated on actual change (dedup below).
+	 */
 	if (!oplus_adfr_is_supported(p_oplus_adfr_params)) {
 		ADFR_DEBUG("adfr is not supported\n");
 		return 0;
