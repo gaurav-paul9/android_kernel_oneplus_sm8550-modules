@@ -3181,7 +3181,8 @@ void oplus_disable_bl_delay_with_frame(struct dsi_panel *panel, u32 disable_fram
  * Enable order (K2): arm hbm_max_state first so sa_handle freezes min-fps,
  * then pin max min-fps (takes its own locks — never call under display_lock),
  * then TX HBM_MAX. last_bl is saved only on enable.
- * Disable: EXIT_HBM_MAX if present, else restore last_bl; clear flag; re-arm ADFR.
+ * Disable: EXIT_HBM_MAX if present (gamma/mode), then always restore last_bl
+ * (EXIT alone leaves a near-max 0x51 on AA551); clear flag; re-arm ADFR.
  * Onepulse blocks enable only so screen-off can always clear HBM.
  */
 int oplus_display_panel_set_hbm_max(void *data)
@@ -3257,15 +3258,22 @@ int oplus_display_panel_set_hbm_max(void *data)
 		mutex_unlock(&display->display_lock);
 	} else {
 		mutex_lock(&display->display_lock);
+		/*
+		 * EXIT_HBM_MAX undoes HBM gamma/mode but on AA551 also writes a
+		 * near-max 0x51 (0x0FFE). Always re-apply the pre-HBM backlight
+		 * after EXIT (or alone if EXIT is missing) — matches the old
+		 * sysfs path that DeviceSettings used.
+		 */
 		if (panel->cur_mode && panel->cur_mode->priv_info &&
 				panel->cur_mode->priv_info->cmd_sets[DSI_CMD_EXIT_HBM_MAX].count) {
 			mutex_lock(&panel->panel_lock);
 			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_EXIT_HBM_MAX);
 			mutex_unlock(&panel->panel_lock);
-		} else {
-			rc = dsi_display_set_backlight(display->drm_conn,
-					display, last_bl);
+			if (rc)
+				LCD_ERR("failed to send EXIT_HBM_MAX, rc=%d\n", rc);
 		}
+		rc = dsi_display_set_backlight(display->drm_conn,
+				display, last_bl);
 		/* clear flag after last HBM-related TX so freeze covers the window */
 		panel->oplus_priv.hbm_max_state = 0;
 		mutex_unlock(&display->display_lock);
