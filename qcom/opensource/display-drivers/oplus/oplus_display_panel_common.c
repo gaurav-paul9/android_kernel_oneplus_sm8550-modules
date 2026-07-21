@@ -2062,6 +2062,7 @@ int oplus_display_panel_set_pwm_pulse(void *data)
 	struct dsi_display *display = get_main_display();
 	struct dsi_panel *panel = NULL;
 	uint32_t *enabled = data;
+	u32 bl_lvl;
 
 	if (!display || !display->panel) {
 		LCD_ERR("Invalid display or panel\n");
@@ -2077,6 +2078,16 @@ int oplus_display_panel_set_pwm_pulse(void *data)
 		return rc;
 	}
 
+	/*
+	 * HBM_MAX rewrites gamma/0x51; stacking a PWM DC↔1P switch on top of a
+	 * live or half-exited HBM session leaves the panel with wrong tables
+	 * (crazy colors / peak brightness). Userspace must clear HBM first.
+	 */
+	if (*enabled && panel->oplus_priv.hbm_max_state) {
+		LCD_WARN("can't enable onepulse while hbm_max is active\n");
+		return -EFAULT;
+	}
+
 	LCD_INFO("Set pwm onepulse status: %d\n", *enabled);
 
 	if (*enabled == panel->oplus_priv.pwm_onepulse_enabled) {
@@ -2087,7 +2098,22 @@ int oplus_display_panel_set_pwm_pulse(void *data)
 
 	mutex_lock(&display->display_lock);
 	rc = oplus_panel_update_pwm_pulse_lock(panel, *enabled);
+	bl_lvl = panel->bl_config.bl_level;
 	mutex_unlock(&display->display_lock);
+
+	/*
+	 * Directional onepulse only emits dcto1p/1ptodc on the backlight path.
+	 * Re-apply the current level so the panel switch runs immediately when
+	 * the sysfs flag flips (otherwise PWM-off leaves HPWM until the next
+	 * real BL change, and HBM-on can land on the wrong drive mode).
+	 */
+	if (!rc && panel->oplus_priv.directional_onepulse_switch
+			&& panel->power_mode == SDE_MODE_DPMS_ON && bl_lvl > 0) {
+		rc = dsi_display_set_backlight(display->drm_conn, display, bl_lvl);
+		if (rc)
+			LCD_ERR("failed to re-apply bl %u after onepulse=%u, rc=%d\n",
+					bl_lvl, *enabled, rc);
+	}
 
 	return rc;
 }
