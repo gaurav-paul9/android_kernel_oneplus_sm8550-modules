@@ -1592,67 +1592,17 @@ static ssize_t oplus_display_set_hbm_max_debug(struct kobject *obj,
 {
 	int rc = 0;
 	u32 hbm_max_state = 0;
-	static u32 last_bl = 0;
-	struct dsi_display *display = oplus_display_get_current_display();
-	struct dsi_panel *panel = NULL;
-
-	if (!display || !display->panel) {
-		LCD_ERR("Invalid display or panel\n");
-		rc = -EINVAL;
-		return rc;
-	}
-
-	panel = display->panel;
-
-	if(display->panel->power_mode != SDE_MODE_DPMS_ON) {
-		LCD_WARN("display panel is not on\n");
-		rc = -EFAULT;
-		return rc;
-	}
 
 	rc = kstrtou32(buf, 10, &hbm_max_state);
 	if (rc) {
 		LCD_WARN("%s cannot be converted to u32", buf);
 		return count;
 	}
-	LCD_INFO("Set hbm max, state=%d\n", hbm_max_state);
 
-#ifdef OPLUS_FEATURE_DISPLAY_ADFR
-	/* min fps cmds overwrite hbm registers, so freeze min fps at max while hbm max is active */
-	if (hbm_max_state) {
-		oplus_adfr_hbm_min_fps_max(display);
-	}
-#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
-
-	mutex_lock(&display->display_lock);
-
-	if (hbm_max_state) {
-		last_bl = oplus_last_backlight;
-		if (panel->cur_mode->priv_info->cmd_sets[DSI_CMD_HBM_MAX].count) {
-			mutex_lock(&panel->panel_lock);
-			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_MAX);
-			mutex_unlock(&panel->panel_lock);
-		}
-		else {
-			LCD_WARN("DSI_CMD_HBM_MAX is undefined, set max backlight: %d\n",
-					panel->bl_config.bl_max_level);
-			rc = dsi_display_set_backlight(display->drm_conn,
-					display, panel->bl_config.bl_max_level);
-		}
-	}
-	else {
-		rc = dsi_display_set_backlight(display->drm_conn,
-				display, last_bl);
-	}
-	panel->oplus_priv.hbm_max_state = hbm_max_state;
-
-	mutex_unlock(&display->display_lock);
-
-#ifdef OPLUS_FEATURE_DISPLAY_ADFR
-	if (!hbm_max_state) {
-		oplus_adfr_hbm_min_fps_restore(panel);
-	}
-#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+	/* panel_id 0 in the low nibble; shared with ioctl / screen-off */
+	rc = oplus_display_panel_set_hbm_max(&hbm_max_state);
+	if (rc)
+		return rc;
 
 	return count;
 }
