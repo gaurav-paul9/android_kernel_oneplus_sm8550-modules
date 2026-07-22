@@ -2099,20 +2099,28 @@ int oplus_display_panel_set_pwm_pulse(void *data)
 	mutex_lock(&display->display_lock);
 	rc = oplus_panel_update_pwm_pulse_lock(panel, *enabled);
 	bl_lvl = panel->bl_config.bl_level;
+	if (bl_lvl == 0)
+		bl_lvl = oplus_last_backlight;
 	mutex_unlock(&display->display_lock);
 
 	/*
 	 * Directional onepulse only emits dcto1p/1ptodc on the backlight path.
 	 * Re-apply the current level so the panel switch runs immediately when
-	 * the sysfs flag flips (otherwise PWM-off leaves HPWM until the next
-	 * real BL change, and HBM-on can land on the wrong drive mode).
+	 * the sysfs flag flips (otherwise PWM-off leaves 1P until the next real
+	 * BL change, and HBM-on lands wrong gamma on 1P drive = psychedelic /
+	 * peak brightness).
 	 */
 	if (!rc && panel->oplus_priv.directional_onepulse_switch
 			&& panel->power_mode == SDE_MODE_DPMS_ON && bl_lvl > 0) {
+		LCD_INFO("re-apply bl %u after onepulse=%u (force pwm switch)\n",
+				bl_lvl, *enabled);
 		rc = dsi_display_set_backlight(display->drm_conn, display, bl_lvl);
 		if (rc)
 			LCD_ERR("failed to re-apply bl %u after onepulse=%u, rc=%d\n",
 					bl_lvl, *enabled, rc);
+	} else if (!rc && panel->oplus_priv.directional_onepulse_switch) {
+		LCD_WARN("skip pwm switch re-apply (power=%u bl=%u)\n",
+				panel->power_mode, bl_lvl);
 	}
 
 	return rc;
@@ -3263,6 +3271,22 @@ int oplus_display_panel_set_hbm_max(void *data)
 		panel->oplus_priv.hbm_max_state = 1;
 		last_bl = oplus_last_backlight;
 		mutex_unlock(&display->display_lock);
+
+		/*
+		 * HBM_MAX gamma assumes DC drive. If PWM was just disabled but the
+		 * directional 1P→DC switch never ran (stale ONEPULSE state), force
+		 * a BL re-apply first so 1ptodc lands before HBM_MAX.
+		 */
+		if (panel->oplus_priv.directional_onepulse_switch
+				&& !oplus_panel_pwm_onepulse_is_enabled(panel)
+				&& panel->oplus_pwm_switch_state == PWM_SWITCH_ONEPULSE_STATE) {
+			u32 bl = panel->bl_config.bl_level ?
+					panel->bl_config.bl_level : oplus_last_backlight;
+			if (bl > 0) {
+				LCD_INFO("force DC before hbm_max (was 1P), bl=%u\n", bl);
+				dsi_display_set_backlight(display->drm_conn, display, bl);
+			}
+		}
 
 #ifdef OPLUS_FEATURE_DISPLAY_ADFR
 		/* min fps cmds overwrite hbm registers; pin max before HBM cmds */

@@ -1443,33 +1443,24 @@ static ssize_t oplus_set_pwm_pulse_debug(struct kobject *obj,
 {
 	int rc = 0;
 	u32 enabled = 0;
-	struct dsi_display *display = get_main_display();
-	struct dsi_panel *panel = NULL;
-
-	if (!display || !display->panel) {
-		LCD_ERR("Invalid display or panel\n");
-		rc = -EINVAL;
-		return rc;
-	}
-
-	panel = display->panel;
-
-	if (!panel->oplus_priv.pwm_onepulse_support) {
-		LCD_ERR("Falied to set pwm onepulse status, because it is unsupport\n");
-		rc = -EFAULT;
-		return rc;
-	}
 
 	rc = kstrtou32(buf, 10, &enabled);
 	if (rc) {
 		LCD_WARN("%s cannot be converted to u32", buf);
 		return count;
 	}
-	LCD_INFO("Set pwm onepulse status: %du\n", enabled);
 
-	mutex_lock(&display->display_lock);
-	oplus_panel_update_pwm_pulse_lock(panel, enabled);
-	mutex_unlock(&display->display_lock);
+	/*
+	 * Must use oplus_display_panel_set_pwm_pulse — not a bare flag write.
+	 * That helper refuses onepulse while hbm_max is active and re-applies
+	 * backlight so directional dcto1p/1ptodc runs immediately. DeviceSettings
+	 * only writes this sysfs node; the old path only flipped the flag, so PWM
+	 * off left the panel in 1P and a later HBM_MAX stacked wrong gamma
+	 * (psychedelic colors / peak brightness).
+	 */
+	rc = oplus_display_panel_set_pwm_pulse(&enabled);
+	if (rc)
+		return rc;
 
 	return count;
 }
