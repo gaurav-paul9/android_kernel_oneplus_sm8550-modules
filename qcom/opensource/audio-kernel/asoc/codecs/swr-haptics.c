@@ -317,16 +317,28 @@ static int hap_enable_swr_dac_port(struct snd_soc_dapm_widget *w,
 		if ((swr_hap->clamped_vmax != 0) && (swr_hap->vmax > swr_hap->clamped_vmax))
 			vmax = swr_hap->clamped_vmax;
 
+		/*
+		 * Vote the slave awake *before* the VMAX regmap traffic. The
+		 * previous order (write/read then vote) races the slave out of
+		 * sleep and produces a pair of "SWR CMD Ignored" interrupts
+		 * per open on both ColorOS and Alpha — normal noise when the
+		 * slave eventually takes later commands, but we have no way
+		 * to prove PLAY landed without visibility. Reorder is free;
+		 * promote the write-back to dev_info so dmesg can confirm.
+		 */
+		swr_device_wakeup_vote(swr_hap->swr_slave);
+
 		rc = regmap_write(swr_hap->regmap, SWR_VMAX_REG, vmax);
 		if (rc) {
 			dev_err_ratelimited(swr_hap->dev, "%s: SWR_VMAX update failed, rc=%d\n",
 				__func__, rc);
+			swr_device_wakeup_unvote(swr_hap->swr_slave);
 			return rc;
 		}
 		regmap_read(swr_hap->regmap, SWR_VMAX_REG, &val);
 		regmap_read(swr_hap->regmap, SWR_READ_DATA_REG, &val);
-		dev_dbg(swr_hap->dev, "%s: swr_vmax is set to 0x%x\n", __func__, val);
-		swr_device_wakeup_vote(swr_hap->swr_slave);
+		dev_info(swr_hap->dev, "%s: swr_vmax wrote 0x%x, readback 0x%x\n",
+			 __func__, vmax, val);
 		swr_connect_port(swr_hap->swr_slave, &port_id, num_port,
 				&ch_mask, &ch_rate, &num_ch, &port_type);
 		break;
@@ -359,6 +371,7 @@ static int hap_enable_swr_dac_port(struct snd_soc_dapm_widget *w,
 #endif /* OPLUS_ARCH_EXTENDS */
 			return rc;
 		}
+		dev_info(swr_hap->dev, "%s: SWR_PLAY armed (val=0x%x)\n", __func__, val);
 #ifdef OPLUS_ARCH_EXTENDS
 // request/release swr device wakeup votes properly. CR3681638
 		swr_device_wakeup_unvote(swr_hap->swr_slave);
