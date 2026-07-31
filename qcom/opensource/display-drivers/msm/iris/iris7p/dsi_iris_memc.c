@@ -172,12 +172,46 @@ void iris_memc_info_set_i7p(u32 *values)
 {
 	struct iris_cfg *pcfg = iris_get_cfg();
 	struct iris_memc_info *info = NULL;
+	/* Last stable video cadence (≥24). Userspace layer-FPS measurement can
+	 * glitch to 15/0 under HDR decode stalls / UI overlays; applying that
+	 * live reprograms FRC to ratio-15-120 and produces structured artifacts
+	 * (pill/beam ghosting). Hold the last good rate while FRC is active.
+	 */
+	static u8 last_good_video_fps;
+	u8 new_fps;
+	bool frc_live;
 
 	info = (struct iris_memc_info *)values;
+	frc_live = pcfg->frc_enabled || pcfg->pwil_mode == FRC_MODE;
+
 	if (info->bit_mask == 0xff) {
+		new_fps = info->video_fps;
+		if (frc_live &&
+		    pcfg->memc_info.memc_mode == MEMC_SINGLE_VIDEO_ENABLE) {
+			if (new_fps == 0 && last_good_video_fps)
+				info->video_fps = last_good_video_fps;
+			else if (new_fps > 0 && new_fps < 24 &&
+				 last_good_video_fps >= 24)
+				info->video_fps = last_good_video_fps;
+		}
 		pcfg->memc_info = *info;
+		if (pcfg->memc_info.video_fps >= 24)
+			last_good_video_fps = pcfg->memc_info.video_fps;
 	} else if (info->bit_mask == 0x04) {
-		pcfg->memc_info.video_fps = info->video_fps;
+		new_fps = info->video_fps;
+		if (frc_live) {
+			if (new_fps == 0 && pcfg->memc_info.video_fps)
+				new_fps = pcfg->memc_info.video_fps;
+			else if (new_fps > 0 && new_fps < 24 &&
+				 pcfg->memc_info.video_fps >= 24)
+				new_fps = pcfg->memc_info.video_fps;
+			if (new_fps != info->video_fps)
+				IRIS_LOGI("%s: hold video_fps %u (reject %u while FRC live)",
+					  __func__, new_fps, info->video_fps);
+		}
+		pcfg->memc_info.video_fps = new_fps;
+		if (new_fps >= 24)
+			last_good_video_fps = new_fps;
 	}
 }
 
