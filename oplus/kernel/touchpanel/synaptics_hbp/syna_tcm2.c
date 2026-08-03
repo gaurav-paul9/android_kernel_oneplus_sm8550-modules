@@ -1889,6 +1889,11 @@ static int syna_dev_enter_normal_sensing(struct syna_tcm *tcm)
  * Wait until the SPI/I2C controller has resumed (bus_ready).  Without this,
  * DC_GESTURE_TYPE_ENABLE can race s2idle and fail, leaving pwr_state unknown.
  *
+ * Must stay interruptible: syna_spi_resume() signals tcm->wait with
+ * wake_up_interruptible(), which does not wake TASK_UNINTERRUPTIBLE sleepers,
+ * so an uninterruptible wait here would always burn the full timeout instead
+ * of returning as soon as the bus is back.
+ *
  * @return 0 if ready, -ETIMEDOUT otherwise.
  */
 static int syna_dev_wait_bus_ready(struct syna_tcm *tcm, unsigned int timeout_ms)
@@ -1900,8 +1905,8 @@ static int syna_dev_wait_bus_ready(struct syna_tcm *tcm, unsigned int timeout_ms
 	if (tcm->bus_ready)
 		return 0;
 
-	left = wait_event_timeout(tcm->wait, tcm->bus_ready,
-				  msecs_to_jiffies(timeout_ms));
+	left = wait_event_interruptible_timeout(tcm->wait, tcm->bus_ready,
+						msecs_to_jiffies(timeout_ms));
 	if (!tcm->bus_ready) {
 		LOGE("bus_ready timeout after %u ms (left=%ld)\n",
 		     timeout_ms, left);
@@ -1993,18 +1998,29 @@ static void syna_lpwg_rearm_work_fn(struct work_struct *work)
 	if (!tcm->lpwg_enabled)
 		return;
 
-	if (!tcm->bus_ready) {
-		if (tcm->lpwg_rearm_attempts < SYNA_LPWG_REARM_MAX_TRIES) {
-			schedule_delayed_work(&tcm->lpwg_rearm_work,
-					      msecs_to_jiffies(SYNA_LPWG_REARM_RETRY_MS));
-		}
+	/*
+	 * A resume is in flight and owns the power state: it will hw-reset the IC
+	 * and set PWR_ON.  Re-arming LPWG underneath it would briefly put the panel
+	 * back into gesture mode while the display is coming up.  syna_spi_resume()
+	 * re-pokes us if it still ends up stuck.
+	 */
+	if (SUB_PWR_RESUMING == tcm->sub_pwr_state)
 		return;
-	}
+
+	/*
+	 * Bus still suspended.  Do not poll: syna_spi_resume() schedules us again
+	 * as soon as bus_ready goes true.  Rescheduling here would re-arm a 300 ms
+	 * timer for the whole doze (the attempt counter does not advance on this
+	 * path, so MAX_TRIES would not bound it).
+	 */
+	if (!tcm->bus_ready)
+		return;
 
 	mutex_lock(&tcm->mutex);
 
 	if (IS_REMOVE == tcm->driver_current_state ||
-	    tcm->pwr_state != PWR_UNKNOWN || !tcm->lpwg_enabled) {
+	    tcm->pwr_state != PWR_UNKNOWN || !tcm->lpwg_enabled ||
+	    SUB_PWR_RESUMING == tcm->sub_pwr_state) {
 		mutex_unlock(&tcm->mutex);
 		return;
 	}
