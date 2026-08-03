@@ -1876,6 +1876,40 @@ static int syna_dev_enter_normal_sensing(struct syna_tcm *tcm)
 }
 /*#endif*/
 #ifdef POWER_ALIVE_AT_SUSPEND
+/* How long to wait for SPI/I2C PM resume before programming LPWG on the IC. */
+#define SYNA_BUS_READY_WAIT_MS		150
+/* Delayed recovery after a failed suspend re-arm (ms). */
+#define SYNA_LPWG_REARM_DELAY_MS	100
+#define SYNA_LPWG_REARM_RETRY_MS	300
+#define SYNA_LPWG_REARM_MAX_TRIES	10
+
+/**
+ * syna_dev_wait_bus_ready()
+ *
+ * Wait until the SPI/I2C controller has resumed (bus_ready).  Without this,
+ * DC_GESTURE_TYPE_ENABLE can race s2idle and fail, leaving pwr_state unknown.
+ *
+ * @return 0 if ready, -ETIMEDOUT otherwise.
+ */
+static int syna_dev_wait_bus_ready(struct syna_tcm *tcm, unsigned int timeout_ms)
+{
+	long left;
+
+	if (!tcm)
+		return -EINVAL;
+	if (tcm->bus_ready)
+		return 0;
+
+	left = wait_event_timeout(tcm->wait, tcm->bus_ready,
+				  msecs_to_jiffies(timeout_ms));
+	if (!tcm->bus_ready) {
+		LOGE("bus_ready timeout after %u ms (left=%ld)\n",
+		     timeout_ms, left);
+		return -ETIMEDOUT;
+	}
+	return 0;
+}
+
 /**
  * syna_dev_enter_lowpwr_sensing()
  *
@@ -1896,6 +1930,19 @@ static int syna_dev_enter_lowpwr_sensing(struct syna_tcm *tcm)
 		return -EINVAL;
 
 	if (tcm->lpwg_enabled) {
+		/*
+		 * Wait for the SPI/I2C PM resume flag before programming the IC.
+		 * Doze/AOD pulses (notification ambient, gesture ambient) re-blank
+		 * quickly and race s2idle; if the bus is mid-suspend, ATTN-driven
+		 * DC writes hang for seconds then fail.  Fail fast when the bus is
+		 * not ready — caller schedules deferred re-arm for when SPI resumes.
+		 */
+		retval = syna_dev_wait_bus_ready(tcm, SYNA_BUS_READY_WAIT_MS);
+		if (retval < 0) {
+			LOGE("bus not ready, skip LPWG program (deferred re-arm)\n");
+			return retval;
+		}
+
 		/* update gesture type */
 		retval = syna_dev_set_gesture_type(tcm, tcm->gesture_type);
 		if (retval < 0) {
@@ -1921,6 +1968,81 @@ static int syna_dev_enter_lowpwr_sensing(struct syna_tcm *tcm)
 	}
 
 	return 0;
+}
+
+/**
+ * syna_lpwg_rearm_work_fn()
+ *
+ * Recover from a failed LPWG re-arm (pwr_state == PWR_UNKNOWN) without
+ * waiting for a full panel resume.  Used after notification/AOD pulses and
+ * any other path where enter_lowpwr_sensing fails once and would otherwise
+ * stick forever (suspend early-outs when pwr_state != PWR_ON).
+ */
+static void syna_lpwg_rearm_work_fn(struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct syna_tcm *tcm = container_of(dwork, struct syna_tcm, lpwg_rearm_work);
+	int retval;
+
+	if (!tcm || IS_REMOVE == tcm->driver_current_state)
+		return;
+
+	if (tcm->pwr_state != PWR_UNKNOWN)
+		return;
+
+	if (!tcm->lpwg_enabled)
+		return;
+
+	if (!tcm->bus_ready) {
+		if (tcm->lpwg_rearm_attempts < SYNA_LPWG_REARM_MAX_TRIES) {
+			schedule_delayed_work(&tcm->lpwg_rearm_work,
+					      msecs_to_jiffies(SYNA_LPWG_REARM_RETRY_MS));
+		}
+		return;
+	}
+
+	mutex_lock(&tcm->mutex);
+
+	if (IS_REMOVE == tcm->driver_current_state ||
+	    tcm->pwr_state != PWR_UNKNOWN || !tcm->lpwg_enabled) {
+		mutex_unlock(&tcm->mutex);
+		return;
+	}
+
+	tcm->lpwg_rearm_attempts++;
+	LOGI("deferred LPWG re-arm attempt %u\n", tcm->lpwg_rearm_attempts);
+
+	retval = syna_dev_enter_lowpwr_sensing(tcm);
+	if (retval < 0) {
+		LOGE("deferred LPWG re-arm failed (%d), attempts=%u\n",
+		     retval, tcm->lpwg_rearm_attempts);
+		mutex_unlock(&tcm->mutex);
+		if (tcm->lpwg_rearm_attempts < SYNA_LPWG_REARM_MAX_TRIES) {
+			schedule_delayed_work(&tcm->lpwg_rearm_work,
+					      msecs_to_jiffies(SYNA_LPWG_REARM_RETRY_MS));
+		}
+		return;
+	}
+
+	tcm->pwr_state = LOW_PWR;
+	tcm->sub_pwr_state = SUB_PWR_SUSPEND_DONE;
+	tcm->lpwg_rearm_attempts = 0;
+	LOGI("deferred LPWG re-arm succeeded (pwr_state:%d)\n", tcm->pwr_state);
+
+	mutex_unlock(&tcm->mutex);
+}
+
+static void syna_schedule_lpwg_rearm(struct syna_tcm *tcm)
+{
+	if (!tcm || !tcm->lpwg_enabled)
+		return;
+	if (tcm->pwr_state != PWR_UNKNOWN)
+		return;
+	if (tcm->lpwg_rearm_attempts >= SYNA_LPWG_REARM_MAX_TRIES)
+		return;
+
+	schedule_delayed_work(&tcm->lpwg_rearm_work,
+			      msecs_to_jiffies(SYNA_LPWG_REARM_DELAY_MS));
 }
 #endif
 
@@ -1984,6 +2106,12 @@ static void syna_speedup_resume(struct work_struct *work)
 		tcm->sub_pwr_state = SUB_PWR_RESUME_DONE;
 		return;
 	}
+
+#ifdef POWER_ALIVE_AT_SUSPEND
+	/* Full resume owns power state — drop any deferred LPWG recovery. */
+	cancel_delayed_work(&tcm->lpwg_rearm_work);
+	tcm->lpwg_rearm_attempts = 0;
+#endif
 
 	if (tcm->health_monitor_support) {
 		reset_healthinfo_time_counter(&start_time);
@@ -2121,9 +2249,18 @@ static int syna_dev_suspend(struct device *dev)
 	bool irq_disabled = true;
 	u64 start_time = 0;
 
-	/* exit directly if device is already in suspend state */
-	if (tcm->pwr_state != PWR_ON)
+	/*
+	 * Already suspended: either LOW_PWR (armed) or PWR_UNKNOWN (failed re-arm).
+	 * The unknown case used to early-return forever so gestures stayed dead until a
+	 * full unblank; schedule deferred re-arm instead.
+	 */
+	if (tcm->pwr_state != PWR_ON) {
+#ifdef POWER_ALIVE_AT_SUSPEND
+		if (tcm->pwr_state == PWR_UNKNOWN && tcm->lpwg_enabled)
+			syna_schedule_lpwg_rearm(tcm);
+#endif
 		return 0;
+	}
 
 	if (tcm->health_monitor_support) {
 		reset_healthinfo_time_counter(&start_time);
@@ -2160,11 +2297,15 @@ static int syna_dev_suspend(struct device *dev)
 	retval = syna_dev_enter_lowpwr_sensing(tcm);
 	if (retval < 0) {
 		tcm->pwr_state = PWR_UNKNOWN;
+		tcm->lpwg_rearm_attempts = 0;
 		LOGE("Fail to enter suspended power mode, tcm->pwr_state: %d.\n", tcm->pwr_state);
 		mutex_unlock(&tcm->mutex);
+		/* Do not stick: retry after SPI settles / panel settles. */
+		syna_schedule_lpwg_rearm(tcm);
 		return retval;
 	}
 	tcm->pwr_state = LOW_PWR;
+	tcm->lpwg_rearm_attempts = 0;
 	LOGI("Enter power saved mode\n");
 #else
 	tcm->pwr_state = PWR_OFF;
@@ -2359,8 +2500,16 @@ static void ts_panel_notifier_callback(enum panel_event_notifier_tag tag,
 		}
 		break;
 	case DRM_PANEL_EVENT_BLANK_LP:
+		/*
+		 * Doze / AOD pulse end.  Unlike full BLANK, stock did not flush
+		 * speedup_resume_wq here — so a short notification pulse can blank
+		 * while async RESET_ON_RESUME is still finishing, then re-arm fails
+		 * or no-ops.  Match full blank: wait for resume work first.
+		 */
 		LOGI("received lp event\n");
 		if (!notification->notif_data.early_trigger) {
+			if (tcm->speedup_resume_wq)
+				flush_workqueue(tcm->speedup_resume_wq);
 			syna_dev_suspend(&tcm->pdev->dev);
 		}
 		break;
@@ -3474,6 +3623,10 @@ static int syna_dev_probe(struct platform_device *pdev)
 	tcm->speedup_resume_wq =
 			create_singlethread_workqueue("sp_resume0");
 	INIT_WORK(&tcm->speed_up_work, syna_speedup_resume);
+#ifdef POWER_ALIVE_AT_SUSPEND
+	INIT_DELAYED_WORK(&tcm->lpwg_rearm_work, syna_lpwg_rearm_work_fn);
+	tcm->lpwg_rearm_attempts = 0;
+#endif
 
 	/* syna_tcm_enable_predict_reading */
 	syna_tcm_enable_predict_reading(tcm->tcm_dev, true);
@@ -3539,6 +3692,14 @@ static int syna_dev_remove(struct platform_device *pdev)
 	syna_send_signal(tcm, SIGKILL);
 	syna_pal_sleep_ms(25);
 	tcm->driver_current_state = IS_REMOVE;
+
+#ifdef POWER_ALIVE_AT_SUSPEND
+	cancel_delayed_work_sync(&tcm->lpwg_rearm_work);
+#endif
+	if (tcm->speedup_resume_wq) {
+		cancel_work_sync(&tcm->speed_up_work);
+		flush_workqueue(tcm->speedup_resume_wq);
+	}
 
 	mutex_lock(&tcm->mutex);
 #if defined(ENABLE_HELPER)
@@ -4349,6 +4510,14 @@ OUT:
 	if (tcm->lpwg_enabled) {
 		wake_up_interruptible(&tcm->wait);
 	}
+#ifdef POWER_ALIVE_AT_SUSPEND
+	/*
+	 * SPI is back.  If a previous doze blank failed to program the IC
+	 * (pwr_state stuck at PWR_UNKNOWN), retry LPWG now that the bus is live.
+	 */
+	if (tcm->pwr_state == PWR_UNKNOWN)
+		syna_schedule_lpwg_rearm(tcm);
+#endif
 	return 0;
 }
 

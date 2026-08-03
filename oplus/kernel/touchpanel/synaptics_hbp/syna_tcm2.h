@@ -760,6 +760,15 @@ struct syna_tcm {
 	bool bus_ready;                                     /*spi or i2c resume status*/
 	wait_queue_head_t wait;
 
+	/*
+	 * Deferred LPWG re-arm after a failed enter_lowpwr_sensing().
+	 * Without this, pwr_state stays PWR_UNKNOWN and later suspends no-op, so all
+	 * screen-off gestures (incl. DT2W) stay dead until a full panel resume.
+	 * Triggered from failed suspend and from SPI PM resume when still stuck.
+	 */
+	struct delayed_work lpwg_rearm_work;
+	unsigned int lpwg_rearm_attempts;
+
 	/* the pointer of userspace application info data */
 	void *userspace_app_info;
 
