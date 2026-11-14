@@ -61,9 +61,6 @@
 #if defined(CONFIG_PXLW_IRIS) || defined(CONFIG_PXLW_SOFT_IRIS)
 #include "dsi_iris_api.h"
 #endif
-#ifdef OPLUS_FEATURE_DISPLAY
-#include "leds_ktz8866.h"
-#endif
 #include "sde_fence.h"
 
 /*
